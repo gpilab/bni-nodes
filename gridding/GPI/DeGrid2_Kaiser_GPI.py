@@ -34,9 +34,18 @@ import numpy as np
 
 class ExternalNode(gpi.NodeAPI):
     """DeGridding module for Post-Cartesian Data - works with 2D data.
+        First, data are rolloff corrected with the gridding kernel function.
+        Second, zeroes are added around the image matrix according to the oversampling factor.
+        Third, the data are inverse Fourer transformed and then gridded to the coordinate locations using a Kaiser-Bessel kernel.
+        
+    WIDGET:
+        oversampling ratio: Oversampling and Kaiser-Bessel kernel function according to 
+            Beatty, Philip J., Dwight G. Nishimura, and John M. Pauly. "Rapid gridding
+            reconstruction with a minimal oversampling ratio." Medical Imaging, IEEE
+            Transactions on 24.6 (2005): 799-808.
 
     INPUT:
-        data: gridded k-space
+        data: data in image domain
         coords: nD array sample locations (scaled between -0.5 and 0.5)
     
     OUTPUT:
@@ -44,55 +53,83 @@ class ExternalNode(gpi.NodeAPI):
     """
     def initUI(self):
         # Widgets
-
+        self.addWidget('DoubleSpinBox', 'oversampling ratio', val=1.375, decimals=3, singlestep=0.125, min=1, max=2, collapsed=True)
+        
         # IO Ports
         self.addInPort('data', 'NPYarray', dtype=np.complex64, obligation=gpi.REQUIRED)
-        self.addInPort('coords', 'NPYarray', dtype=np.float32, obligation=gpi.REQUIRED)
+        self.addInPort('coords', 'NPYarray', dtype=[np.float64, np.float32], obligation=gpi.REQUIRED)
         self.addOutPort('out', 'NPYarray', dtype=np.complex64)
 
     def compute(self):
 
         import numpy as np
-        import bni.gridding.grid_kaiser as dg
+        import bni.gridding.Kaiser2D_utils as kaiser2D
 
-        crds = self.getData('coords')
-        gdata = self.getData('data')
-         
-        # assume the last dims (i.e. each image) must be degridded independently
-        gdata_iter, iter_shape = self.pinch(gdata, stop=-2)
+        # get port and widget inputs
+        coords = self.getData('coords').astype(np.float32, copy=False)
+        data = self.getData('data').astype(np.complex64, copy=False)
+        oversampling_ratio = self.getVal('oversampling ratio')
+        
+        # Determine matrix size before and after oversampling
+        mtx_original = data.shape[-1]
+        mtx = np.int(mtx_original * oversampling_ratio)
+        if mtx%2:
+            mtx+=1
+        if oversampling_ratio > 1:
+            mtx_min = np.int((mtx-mtx_original)/2)
+            mtx_max = mtx_min + mtx_original
+        else:
+            mtx_min = 0
+            mtx_max = mtx
+        
+        # data dimensions
+        nr_points = coords.shape[-2]
+        nr_arms = coords.shape[-3]
+        if data.ndim == 2:
+            nr_coils = 1
+            extra_dim1 = 1
+            extra_dim2 = 1
+            data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
+        elif data.ndim == 3:
+            nr_coils = data.shape[0]
+            extra_dim1 = 1
+            extra_dim2 = 1
+            data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
+        elif data.ndim == 4:
+            nr_coils = data.shape[0]
+            extra_dim1 = data.shape[-3]
+            extra_dim2 = 1
+            data.shape = [nr_coils,extra_dim2,extra_dim1,mtx_original,mtx_original]
+        elif data.ndim == 5:
+            nr_coils = data.shape[0]
+            extra_dim1 = data.shape[-3]
+            extra_dim2 = data.shape[-4]
+        elif data.ndim > 5:
+            self.log.warn("Not implemented yet")
+        out_dims_degrid = [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points]
+        out_dims_fft = [nr_coils, extra_dim2, extra_dim1, mtx, mtx]
 
-        # construct an output array w/ slice dims
-        out_shape = iter_shape + list(crds.shape)[:-1]
-        out = np.zeros(out_shape, dtype=gdata.dtype)
-        out_iter,_ = self.pinch(out, stop=-2)
+        # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
+        if coords.ndim == 3:
+            coords.shape = [1,nr_arms,nr_points,2]
 
-        # degrid all slices
-        for i in range(np.prod(iter_shape)):
-            out_iter[i] = dg.degrid(crds, gdata_iter[i])
+        # pre-calculate Kaiser-Bessel kernel
+        kernel_table_size = 800
+        kernel = kaiser2D.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
+        
+        # pre-calculate the rolloff for the spatial domain
+        roll = kaiser2D.rolloff2D(mtx, kernel)
 
-        # reset array shapes and output
-        self.setData('out', out)
-
+        # perform rolloff correction
+        rolloff_corrected_data = data * roll[mtx_min:mtx_max,mtx_min:mtx_max]
+    
+        # inverse-FFT with zero-interpolation to oversampled k-space
+        oversampled_kspace = kaiser2D.fft2D(rolloff_corrected_data, dir=1, out_dims_fft=out_dims_fft)
+   
+        out = kaiser2D.degrid2D(oversampled_kspace, coords, kernel, out_dims_degrid)
+        self.setData('out', out.squeeze())
+ 
         return(0)
 
     def execType(self):
         return gpi.GPI_PROCESS
-
-    def pinch(self, a, start=0, stop=-1):
-        '''Combine multiple adjacent dimensions into one by taking the product
-        of dimension lengths.  The output array is a view of the input array.
-        INPUT:
-            a: input array
-            start: first dimension to pinch
-            stop: last dimension to pinch
-        OUTPUT:
-            out: a view of the input array with pinched dimensions
-            iter_shape: a list of dimensions that will be iterated on
-        '''
-        import numpy as np
-        out = a.view()
-        s = list(a.shape)
-        iter_shape = s[start:stop]
-        out_shape = s[:start] + [np.prod(iter_shape)] + s[stop:]
-        out.shape = out_shape
-        return out, iter_shape
