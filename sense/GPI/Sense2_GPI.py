@@ -1,20 +1,20 @@
 # Copyright (c) 2014, Dignity Health
 # All rights reserved.
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
-# 
+#
 # 1. Redistributions of source code must retain the above copyright notice, this
 # list of conditions and the following disclaimer.
-# 
+#
 # 2. Redistributions in binary form must reproduce the above copyright notice,
 # this list of conditions and the following disclaimer in the documentation
 # and/or other materials provided with the distribution.
-# 
+#
 # 3. Neither the name of the copyright holder nor the names of its contributors
 # may be used to endorse or promote products derived from this software without
 # specific prior written permission.
-# 
+#
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 # ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 # WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -32,11 +32,12 @@
 import numpy as np
 import gpi
 
+
 class ExternalNode(gpi.NodeAPI):
     """2D iterative SENSE reconstruction.
 
     * Pruessmann, Klaas P., et al. "Advances in sensitivity encoding with
-      arbitrary k‐space trajectories." Magnetic Resonance in Medicine 46.4
+      arbitrary k-space trajectories." Magnetic Resonance in Medicine 46.4
       (2001): 638-651.
     * Shewchuk, Jonathan Richard. "An introduction to the conjugate gradient
       method without the agonizing pain." (1994).
@@ -94,8 +95,8 @@ class ExternalNode(gpi.NodeAPI):
 
         if step and (self.getData('d') is not None):
             # update the UI with the number of iterations
-            self.setAttr('iterations', quietval=iterations+1)
-        
+            self.setAttr('iterations', quietval=iterations + 1)
+
         # check size of data vs. coords
         self.log.debug("validate SENSE2 - check size of data vs. coords")
         data = self.getData('data')
@@ -133,7 +134,7 @@ class ExternalNode(gpi.NodeAPI):
             self.setAttr('Autocalibration Taper (%)', visible=False)
             self.setAttr('Mask Floor (% of max mag)', visible=False)
             self.setAttr('Dynamic data - average all dynamics for csm', visible=False)
-            
+
             # check size of data vs. csm
             if data.ndim != csm.ndim:
                 self.log.warn("data and csm do not agree in the number of dimensions")
@@ -141,24 +142,23 @@ class ExternalNode(gpi.NodeAPI):
             elif data.shape[:-2] != csm.shape[:-2]:
                 self.log.warn("data and csm do not agree in shape (last 2 dimensions don't matter).")
                 return 1
-                    
+
         return 0
-    
 
     def compute(self):
         import bni.gridding.Kaiser2D_utils as kaiser2D
-        
+
         self.log.debug("Start CG SENSE 2D")
         # get port and widget inputs
         data = self.getData('data').astype(np.complex64, copy=False)
         coords = self.getData('coords').astype(np.float32, copy=False)
         weights = self.getData('weights').astype(np.float32, copy=False)
-        
+
         mtx_original = self.getVal('mtx')
         iterations = self.getVal('iterations')
         step = self.getVal('step')
         oversampling_ratio = self.getVal('oversampling ratio')
-        
+
         # for a single iteration step use the csm stored in the out port
         if step and (self.getData('oversampled CSM') is not None):
             csm = self.getData('oversampled CSM')
@@ -166,18 +166,18 @@ class ExternalNode(gpi.NodeAPI):
             csm = self.getData('coil sensitivity')
         if csm is not None:
             csm = csm.astype(np.complex64, copy=False)
-        
+
         # oversampling: Oversample at the beginning and crop at the end
         mtx = np.int(mtx_original * oversampling_ratio)
-        if mtx%2:
-            mtx+=1
+        if mtx % 2:
+            mtx += 1
         if oversampling_ratio > 1:
-            mtx_min = np.int((mtx-mtx_original)/2)
+            mtx_min = np.int((mtx - mtx_original) / 2)
             mtx_max = mtx_min + mtx_original
         else:
             mtx_min = 0
             mtx_max = mtx
-                
+
         # data dimensions
         nr_points = data.shape[-1]
         nr_arms = data.shape[-2]
@@ -185,11 +185,11 @@ class ExternalNode(gpi.NodeAPI):
         if data.ndim == 3:
             extra_dim1 = 1
             extra_dim2 = 1
-            data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
+            data.shape = [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points]
         elif data.ndim == 4:
             extra_dim1 = data.shape[-3]
             extra_dim2 = 1
-            data.shape = [nr_coils,extra_dim2,extra_dim1,nr_arms,nr_points]
+            data.shape = [nr_coils, extra_dim2, extra_dim1, nr_arms, nr_points]
         elif data.ndim == 5:
             extra_dim1 = data.shape[-3]
             extra_dim2 = data.shape[-4]
@@ -202,28 +202,28 @@ class ExternalNode(gpi.NodeAPI):
 
         # coords dimensions: (add 1 dimension as they could have another dimension for golden angle dynamics
         if coords.ndim == 3:
-            coords.shape = [1,nr_arms,nr_points,2]
-            weights.shape = [1,nr_arms,nr_points]
+            coords.shape = [1, nr_arms, nr_points, 2]
+            weights.shape = [1, nr_arms, nr_points]
 
         # output including all iterations
-        x_iterations = np.zeros([iterations,extra_dim2,extra_dim1,mtx_original,mtx_original],dtype=np.complex64)
+        x_iterations = np.zeros([iterations, extra_dim2, extra_dim1, mtx_original, mtx_original], dtype=np.complex64)
         if step and (iterations > 1):
             previous_iterations = self.getData('x iterations')
-            previous_iterations.shape = [iterations-1,extra_dim2, extra_dim1, mtx_original, mtx_original]
-            x_iterations[:-1,:,:,:,:] = previous_iterations
+            previous_iterations.shape = [iterations - 1, extra_dim2, extra_dim1, mtx_original, mtx_original]
+            x_iterations[:-1, :, :, :, :] = previous_iterations
 
         # pre-calculate Kaiser-Bessel kernel
         self.log.debug("Calculate kernel")
         kernel_table_size = 800
-        kernel = kaiser2D.kaiserbessel_kernel( kernel_table_size, oversampling_ratio)
-        
+        kernel = kaiser2D.kaiserbessel_kernel(kernel_table_size, oversampling_ratio)
+
         # pre-calculate the rolloff for the spatial domain
         roll = kaiser2D.rolloff2D(mtx, kernel)
 
         # for a single iteration step use the oversampled csm and intermediate results stored in outports
         if step and (self.getData('d') is not None):
             self.log.debug("Save some time and use the previously determined csm stored in the cropped CSM outport.")
-        else: # this is the normal path (not single iteration step)
+        else:  # this is the normal path (not single iteration step)
             # grid to create images that are corrupted by
             # aliasing due to undersampling.  If the k-space data have an
             # auto-calibration region, then this can be used to generate B1 maps.
@@ -248,22 +248,22 @@ class ExternalNode(gpi.NodeAPI):
                 # Assuming the FOV was the same: zero-fill in k-space
                 if csm.ndim != 5:
                     self.log.debug("Reshape imported csm")
-                    csm.shape = [nr_coils,extra_dim2,extra_dim1,csm.shape[-2],csm.shape[-1]]
+                    csm.shape = [nr_coils, extra_dim2, extra_dim1, csm.shape[-2], csm.shape[-1]]
                 if csm.shape[-1] != mtx:
                     self.log.debug("Interpolate csm to oversampled matrix size")
                     csm_oversampled_mtx = np.int(csm.shape[-1] * oversampling_ratio)
-                    if csm_oversampled_mtx%2:
-                        csm_oversampled_mtx+=1
+                    if csm_oversampled_mtx % 2:
+                        csm_oversampled_mtx += 1
                     out_dims_oversampled_image_domain = [nr_coils, extra_dim2, extra_dim1, csm_oversampled_mtx, csm_oversampled_mtx]
                     csm = kaiser2D.fft2D(csm, dir=1, out_dims_fft=out_dims_oversampled_image_domain)
                     csm = kaiser2D.fft2D(csm, dir=0, out_dims_fft=out_dims_fft)
             self.setData('oversampled CSM', csm)
-            self.setData('cropped CSM', csm[...,mtx_min:mtx_max,mtx_min:mtx_max])
+            self.setData('cropped CSM', csm[..., mtx_min:mtx_max, mtx_min:mtx_max])
 
         # keep a conjugate csm set on hand
         csm_conj = np.conj(csm)
 
-        ## Iteration 1:
+        # Iteration 1:
         if step and (self.getData('d') is not None):
             self.log.debug("\tSENSE Iteration: " + str(iterations))
             # make sure the loop doesn't start if only one step is needed
@@ -276,34 +276,34 @@ class ExternalNode(gpi.NodeAPI):
             x = self.getData('x').copy()
 
             # A
-            Ad = csm * d # add coil phase
-            Ad *= roll # pre-rolloff for degrid convolution
+            Ad = csm * d  # add coil phase
+            Ad *= roll  # pre-rolloff for degrid convolution
             Ad = kaiser2D.fft2D(Ad, dir=1)
             Ad = kaiser2D.degrid2D(Ad, coords, kernel, out_dims_degrid)
             Ad = kaiser2D.grid2D(Ad, coords, weights, kernel, out_dims_grid)
             Ad = kaiser2D.fft2D(Ad, dir=0)
             Ad *= roll
-            Ad = csm_conj * Ad # broadcast multiply to remove coil phase
-            Ad = Ad.sum(axis=0) # assume the coil dim is the first
+            Ad = csm_conj * Ad  # broadcast multiply to remove coil phase
+            Ad = Ad.sum(axis=0)  # assume the coil dim is the first
         else:
             self.log.debug("\tSENSE Iteration: 1")
             # calculate initial conditions
             # d_0
-            d_0 = csm_conj * image_domain # broadcast multiply to remove coil phase
-            d_0 = d_0.sum(axis=0) # assume the coil dim is the first
+            d_0 = csm_conj * image_domain  # broadcast multiply to remove coil phase
+            d_0 = d_0.sum(axis=0)  # assume the coil dim is the first
 
             # Ad_0:
             #   degrid -> grid (loop over coils)
-            Ad_0 = csm * d_0 # add coil phase
-            Ad_0 *= roll # pre-rolloff for degrid convolution
+            Ad_0 = csm * d_0  # add coil phase
+            Ad_0 *= roll  # pre-rolloff for degrid convolution
             Ad_0 = kaiser2D.fft2D(Ad_0, dir=1)
             Ad_0 = kaiser2D.degrid2D(Ad_0, coords, kernel, out_dims_degrid)
             Ad_0 = kaiser2D.grid2D(Ad_0, coords, weights, kernel, out_dims_grid)
             Ad_0 = kaiser2D.fft2D(Ad_0, dir=0)
             Ad_0 *= roll
-            Ad_0 = csm_conj * Ad_0 # broadcast multiply to remove coil phase
-            Ad_0 = Ad_0.sum(axis=0) # assume the coil dim is the first
-            
+            Ad_0 = csm_conj * Ad_0  # broadcast multiply to remove coil phase
+            Ad_0 = Ad_0.sum(axis=0)  # assume the coil dim is the first
+
             # use the initial conditions for the first iter
             r = d = d_0
             x = np.zeros_like(d)
@@ -311,17 +311,17 @@ class ExternalNode(gpi.NodeAPI):
 
         # CG - iter 1 or step
         d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
-        
+
         current_iteration = x_last.copy()
         current_iteration.shape = iterations_shape
         if step:
-            x_iterations[-1,:,:,:,:] = current_iteration[...,mtx_min:mtx_max,mtx_min:mtx_max]
+            x_iterations[-1, :, :, :, :] = current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]
         else:
-            x_iterations[0,:,:,:,:] = current_iteration[...,mtx_min:mtx_max,mtx_min:mtx_max]
+            x_iterations[0, :, :, :, :] = current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]
 
-        ## Iterations >1:
-        for i in range(iterations-1):
-            self.log.debug("\tSENSE Iteration: " + str(i+2))
+        # Iterations >1:
+        for i in range(iterations - 1):
+            self.log.debug("\tSENSE Iteration: " + str(i + 2))
 
             # input the result of the last iter
             d = d_last
@@ -329,23 +329,23 @@ class ExternalNode(gpi.NodeAPI):
             x = x_last
 
             # A
-            Ad = csm * d # add coil phase
-            Ad *= roll # pre-rolloff for degrid convolution
+            Ad = csm * d  # add coil phase
+            Ad *= roll  # pre-rolloff for degrid convolution
             Ad = kaiser2D.fft2D(Ad, dir=1)
             Ad = kaiser2D.degrid2D(Ad, coords, kernel, out_dims_degrid)
             Ad = kaiser2D.grid2D(Ad, coords, weights, kernel, out_dims_grid)
             Ad = kaiser2D.fft2D(Ad, dir=0)
             Ad *= roll
-            Ad = csm_conj * Ad # broadcast multiply to remove coil phase
-            Ad = Ad.sum(axis=0) # assume the coil dim is the first
+            Ad = csm_conj * Ad  # broadcast multiply to remove coil phase
+            Ad = Ad.sum(axis=0)  # assume the coil dim is the first
             # CG
             d_last, r_last, x_last = self.do_cg(d, r, x, Ad)
 
             current_iteration = x_last.copy()
             current_iteration.shape = iterations_shape
-            x_iterations[i+1,:,:,:,:] = current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]
+            x_iterations[i + 1, :, :, :, :] = current_iteration[..., mtx_min:mtx_max, mtx_min:mtx_max]
 
-        # return the final image     
+        # return the final image
         self.setData('d', d_last)
         self.setData('r', r_last)
         self.setData('x', x_last)
@@ -362,9 +362,9 @@ class ExternalNode(gpi.NodeAPI):
 
         # Calculate alpha
         # r^H r / (d^H Ad)
-        rHr = np.dot(np.conj(r_in.flatten()), r_in.flatten()) 
+        rHr = np.dot(np.conj(r_in.flatten()), r_in.flatten())
         dHAd = np.dot(np.conj(d_in.flatten()), Ad_in.flatten())
-        alpha = rHr/dHAd
+        alpha = rHr / dHAd
 
         # Calculate x(i+1)
         # x(i) + alpha d(i)
@@ -376,7 +376,7 @@ class ExternalNode(gpi.NodeAPI):
 
         # Calculate beta
         # r(i+1)^H r(i+1) / (r(i)^H r(i))
-        r1Hr1 = np.dot(np.conj(r_out.flatten()), r_out.flatten()) 
+        r1Hr1 = np.dot(np.conj(r_out.flatten()), r_out.flatten())
         beta = r1Hr1 / rHr
 
         # Calculate d(i+1)
@@ -387,5 +387,5 @@ class ExternalNode(gpi.NodeAPI):
 
     def execType(self):
         # numpy linalg fails if this isn't a thread :(
-        #return gpi.GPI_THREAD
+        # return gpi.GPI_THREAD
         return gpi.GPI_PROCESS
