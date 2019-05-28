@@ -1,3 +1,6 @@
+# Archived
+This repo was archived on May 28, 2019. Active development of any new public node from Jim Pipe's research group will be managed in a new repository, if needed.
+
 # BNI Nodes
 Coming soon...
 
